@@ -4,6 +4,7 @@
 const express = require('express');
 require('dotenv').config();
 const cors = require('cors');
+const superagent = require('superagent');
 
 // Application Setup
 const app = express();
@@ -24,21 +25,51 @@ function rootHandler(request, response) {
 
 function locationHandler(request, response) {
   const city = request.query.city;
-  const locationData = require('./data/location.json');
-  const location = new Location(city, locationData);
-  response.status(200).send(location);
+  const url = 'https://us1.locationiq.com/v1/search.php';
+  superagent.get(url)
+    .query({
+      key: process.env.LOCATION_KEY,
+      q: city,
+      format: 'json'
+    })
+    .then(locationData => {
+      const rawLocation = locationData.body[0];
+      const location = new Location(city, rawLocation);
+      response.status(200).send(location);
+    })
+    .catch(err => {
+      console.log(err);
+      errorHandler(err, request, response);
+    });
 }
 
 function restaurantHandler(request, response) {
-  // const latitude = request.query.latitude;
-  // const longitude = request.query.longtude;
-  const locationData = require('./data/restaurants.json');
-  const arrayOfRestaurants = locationData.nearby_restaurants;
-  const restaurantResults = [];
-  arrayOfRestaurants.forEach((restaurant) => {
-    restaurantResults.push(new Restaurant(restaurant));
-  });
-  response.send(restaurantResults);
+  const lat = request.query.latitude;
+  const lon = request.query.longitude;
+  const page = parseInt(request.query.page);
+  const restaurantsPerPage = 5;
+  const start = ((page - 1) * restaurantsPerPage + 1);
+  const url = 'https://api.yelp.com/v3/businesses/search';
+  superagent.get(url)
+    .query({
+      latitude: lat,
+      longitude: lon,
+      limit: restaurantsPerPage,
+      offset: start
+    })
+    .set('Authorization', `Bearer ${process.env.YELP_KEY}`)
+    .then(restaurantData => {
+      const arrayOfRestaurants = restaurantData.body.businesses;
+      const restaurantResults = [];
+      arrayOfRestaurants.forEach((restaurant) => {
+        restaurantResults.push(new Restaurant(restaurant));
+      });
+      response.status(200).send(restaurantResults);
+    })
+    .catch(err => {
+      console.log(err);
+      errorHandler(err, request, response);
+    });
 }
 
 function notFoundHandler(request, response) {
@@ -52,17 +83,17 @@ function errorHandler(error, request, response, next) {
 // Helper Functions
 function Location(city, locationData) {
   this.search_query = city;
-  this.formatted_query = locationData[0].display_name;
-  this.latitude = locationData[0].lat;
-  this.longitude = locationData[0].lon;
+  this.formatted_query = locationData.display_name;
+  this.latitude = locationData.lat;
+  this.longitude = locationData.lon;
 }
 
 function Restaurant(restaurantData) {
-  this.url = restaurantData.restaurant.url;
-  this.name = restaurantData.restaurant.name;
-  this.rating = restaurantData.restaurant.user_rating.aggregate_rating;
-  this.price = restaurantData.restaurant.price_range;
-  this.image_url = restaurantData.restaurant.featured_image;
+  this.url = restaurantData.url;
+  this.name = restaurantData.name;
+  this.rating = restaurantData.rating;
+  this.price = restaurantData.price_range;
+  this.image_url = restaurantData.image_url;
 }
 
 // App listener
