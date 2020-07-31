@@ -5,17 +5,16 @@ const express = require('express');
 require('dotenv').config();
 const cors = require('cors');
 const superagent = require('superagent');
-const pg = require('pg');
+
+// My Dependencies
+const client = require('./modules/client');
+const getLocationData = require('./modules/location');
+const getRestaurantData = require('./modules/yelp');
 
 // Application Setup
 const app = express();
 const PORT = process.env.PORT;
 app.use(cors());
-if (!process.env.DATABASE_URL) {
-  throw new Error('Missing database URL.');
-}
-const client = new pg.Client(process.env.DATABASE_URL);
-client.on('error', err => { throw err; });
 
 // Route Definitions
 app.get('/', rootHandler);
@@ -42,64 +41,13 @@ function locationHandler(request, response) {
     });
 }
 
-function getLocationData(city) {
-  const SQL = `SELECT * FROM locations WHERE search_query = $1`;
-  const values = [city];
-  return client.query(SQL, values)
-    .then(results => {
-      if (results.rowCount > 0) {
-        return results.rows[0];
-      } else {
-        const url = 'https://us1.locationiq.com/v1/search.php';
-        return superagent.get(url)
-          .query({
-            key: process.env.LOCATION_KEY,
-            q: city,
-            format: 'json'
-          })
-          .then((data) => {
-            return setLocationData(city, data.body[0]);
-          });
-      }
-    });
-}
-
-function setLocationData(city, locationData) {
-  const location = new Location(city, locationData);
-  const SQL = `
-    INSERT INTO locations (search_query, formatted_query, latitude, longitude)
-    VALUES ($1, $2, $3, $4)
-	  RETURNING *;
-  `;
-  const values = [city, location.formatted_query, location.latitude, location.longitude];
-  return client.query(SQL, values)
-    .then(results => {
-      return results.rows[0];
-    });
-}
-
 function restaurantHandler(request, response) {
   const lat = request.query.latitude;
   const lon = request.query.longitude;
   const page = parseInt(request.query.page);
-  const restaurantsPerPage = 5;
-  const start = ((page - 1) * restaurantsPerPage + 1);
-  const url = 'https://api.yelp.com/v3/businesses/search';
-  superagent.get(url)
-    .query({
-      latitude: lat,
-      longitude: lon,
-      limit: restaurantsPerPage,
-      offset: start
-    })
-    .set('Authorization', `Bearer ${process.env.YELP_KEY}`)
+  getRestaurantData(lat, lon, page)
     .then(restaurantData => {
-      const arrayOfRestaurants = restaurantData.body.businesses;
-      const restaurantResults = [];
-      arrayOfRestaurants.forEach((restaurant) => {
-        restaurantResults.push(new Restaurant(restaurant));
-      });
-      response.status(200).send(restaurantResults);
+      response.status(200).send(restaurantData);
     })
     .catch(err => {
       console.log(err);
@@ -130,7 +78,7 @@ function hikingHandler(request, response) {
 }
 
 function notFoundHandler(request, response) {
-  response.status(404).sendFile('404.html');
+  response.status(404).send({ notFound: true, message: 'Not Found'});
 }
 
 function errorHandler(error, request, response, next) {
@@ -138,21 +86,6 @@ function errorHandler(error, request, response, next) {
 }
 
 // Helper Functions
-function Location(city, locationData) {
-  this.search_query = city;
-  this.formatted_query = locationData.display_name;
-  this.latitude = locationData.lat;
-  this.longitude = locationData.lon;
-}
-
-function Restaurant(restaurantData) {
-  this.url = restaurantData.url;
-  this.name = restaurantData.name;
-  this.rating = restaurantData.rating;
-  this.price = restaurantData.price_range;
-  this.image_url = restaurantData.image_url;
-}
-
 function Trail(trail) {
   this.name = trail.name;
   this.location = trail.location;
